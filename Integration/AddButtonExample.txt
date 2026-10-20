@@ -1,0 +1,11 @@
+Пример перехода из уже существующего модуля поиска пациентов.
+
+Если MKABID уже есть в JavaScript:
+
+window.open('/PatientFiles/Default.aspx?mkabid=' + encodeURIComponent(mkabid), '_blank', 'noopener');
+
+Если ссылка формируется сервером ASP.NET:
+
+<a href="/PatientFiles/Default.aspx?mkabid=<%# Eval("MKABID") %>" target="_blank" rel="noopener">Прикреплённые файлы</a>
+
+Лучше передавать только MKABID. Путь к файлу, FileInfoID и UNC-путь в браузер не передавать.

@@ -1,0 +1,19 @@
+{
+  "name": "patient-files-viewer-build",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "vite build && zrimo-copy-assets ../ViewerDist/zrimo"
+  },
+  "dependencies": {
+    "@zrimo/viewer": "0.1.2",
+    "shrimp-doc-viewer": "0.5.0"
+  },
+  "devDependencies": {
+    "vite": "7.1.12"
+  }
+}

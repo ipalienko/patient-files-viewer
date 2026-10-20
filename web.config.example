@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <connectionStrings>
+    <!--
+      Локальная конфигурация. Не коммитьте рабочий web.config.
+      Для SQL Authentication замените DB_SERVER / DB_NAME / DB_USER / DB_PASSWORD.
+      Для Windows Integrated Security используйте:
+      Data Source=DB_SERVER;Initial Catalog=DB_NAME;Integrated Security=True;Application Name=PatientFilesWeb;
+    -->
+    <add name="MisDb"
+         connectionString="Data Source=tcp:DB_SERVER,1433;Initial Catalog=DB_NAME;User ID=DB_USER;Password=DB_PASSWORD;TrustServerCertificate=True;Application Name=PatientFilesWeb;"
+         providerName="System.Data.SqlClient" />
+  </connectionStrings>
+
+  <appSettings>
+    <!-- Если Path в БД относительный, задайте локальный корень. Для полного UNC оставьте пустым. -->
+    <add key="FileRoot" value="" />
+
+    <!-- Разрешённые корни, несколько значений разделяются символом |. -->
+    <add key="AllowedRoots" value="\\FILE_SERVER\SHARE_ROOT" />
+
+    <!-- Пример: X:\=>\\FILE_SERVER\SHARE_ROOT -->
+    <add key="PathMappings" value="" />
+
+    <add key="MaxPreviewSizeMb" value="100" />
+  </appSettings>
+
+  <system.web>
+    <compilation debug="false" targetFramework="4.8" />
+    <httpRuntime targetFramework="4.8" maxRequestLength="102400" executionTimeout="180" />
+    <globalization requestEncoding="utf-8" responseEncoding="utf-8" fileEncoding="utf-8" culture="ru-RU" uiCulture="ru-RU" />
+
+    <!-- Текущий вариант: доступ контролируется на уровне внутренней сети/IIS. -->
+    <authentication mode="None" />
+    <identity impersonate="false" />
+
+    <customErrors mode="RemoteOnly" defaultRedirect="Default.aspx" />
+    <pages validateRequest="true" />
+  </system.web>
+
+  <system.webServer>
+    <validation validateIntegratedModeConfiguration="false" />
+
+    <!-- Authentication специально не задаётся здесь: эти секции часто locked на уровне IIS. -->
+
+    <staticContent>
+      <remove fileExtension=".wasm" />
+      <mimeMap fileExtension=".wasm" mimeType="application/wasm" />
+      <remove fileExtension=".mjs" />
+      <mimeMap fileExtension=".mjs" mimeType="text/javascript" />
+      <remove fileExtension=".woff2" />
+      <mimeMap fileExtension=".woff2" mimeType="font/woff2" />
+      <remove fileExtension=".ttf" />
+      <mimeMap fileExtension=".ttf" mimeType="font/ttf" />
+      <remove fileExtension=".pfb" />
+      <mimeMap fileExtension=".pfb" mimeType="application/octet-stream" />
+      <remove fileExtension=".bcmap" />
+      <mimeMap fileExtension=".bcmap" mimeType="application/octet-stream" />
+      <remove fileExtension=".icc" />
+      <mimeMap fileExtension=".icc" mimeType="application/vnd.iccprofile" />
+    </staticContent>
+
+    <httpProtocol>
+      <customHeaders>
+        <add name="X-Content-Type-Options" value="nosniff" />
+        <add name="X-Frame-Options" value="SAMEORIGIN" />
+        <add name="Referrer-Policy" value="same-origin" />
+        <add name="Cross-Origin-Resource-Policy" value="same-origin" />
+        <add name="Content-Security-Policy" value="default-src 'self'; img-src 'self' blob: data:; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src 'self'; frame-src 'self' blob:; object-src 'none'; base-uri 'self';" />
+      </customHeaders>
+    </httpProtocol>
+  </system.webServer>
+</configuration>
