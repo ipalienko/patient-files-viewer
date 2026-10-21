@@ -99,8 +99,11 @@ SELECT
     ft.Name
 FROM dbo.atf_FileType ft
 WHERE ISNULL(ft.x_Status, 1) = 1
+  AND ft.FileTypeID > 0
+  AND ISNULL(LTRIM(RTRIM(ft.Name)), '') <> N'Тип 0'
   AND ISNULL(ft.DateBegin, CONVERT(datetime, '19000101', 112)) <= GETDATE()
-  AND ISNULL(ft.DateEnd, CONVERT(datetime, '22220101', 112)) >= CONVERT(date, GETDATE())
+  AND ft.DateEnd IS NOT NULL
+  AND CONVERT(date, ft.DateEnd) > CONVERT(date, GETDATE())
 ORDER BY ft.Name, ft.Code, ft.FileTypeID;";
 
             var result = new List<FileTypeDto>();
@@ -198,9 +201,12 @@ WHERE m.MKABID = @MKABID;", cn))
 SELECT TOP (1) ft.Name, ft.Code
 FROM dbo.atf_FileType ft
 WHERE ft.FileTypeID = @FileTypeID
+  AND ft.FileTypeID > 0
+  AND ISNULL(LTRIM(RTRIM(ft.Name)), '') <> N'Тип 0'
   AND ISNULL(ft.x_Status, 1) = 1
   AND ISNULL(ft.DateBegin, CONVERT(datetime, '19000101', 112)) <= GETDATE()
-  AND ISNULL(ft.DateEnd, CONVERT(datetime, '22220101', 112)) >= CONVERT(date, GETDATE());", cn))
+  AND ft.DateEnd IS NOT NULL
+  AND CONVERT(date, ft.DateEnd) > CONVERT(date, GETDATE());", cn))
                 {
                     cmd.Parameters.Add("@FileTypeID", SqlDbType.Int).Value = fileTypeId;
                     using (var rd = cmd.ExecuteReader())
