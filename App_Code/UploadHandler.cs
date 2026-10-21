@@ -19,13 +19,16 @@ namespace PatientFiles
             var js = new JavaScriptSerializer { MaxJsonLength = 1024 * 1024 * 4 };
 
             string tempPath = null;
-            string finalPath = null;
+            string physicalFinalPath = null;
             bool dbCommitted = false;
 
             try
             {
                 if (!String.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
                     throw new HttpException(405, "Разрешён только POST-запрос.");
+
+                if (!ReadBoolSetting("UploadEnabled", false))
+                    throw new HttpException(403, "Прикрепление файлов отключено в конфигурации модуля.");
 
                 int mkabId;
                 if (!Int32.TryParse(context.Request.Form["mkabid"], out mkabId) || mkabId <= 0)
@@ -35,16 +38,22 @@ namespace PatientFiles
                 if (!Int32.TryParse(context.Request.Form["fileTypeId"], out fileTypeId) || fileTypeId <= 0)
                     throw new HttpException(400, "Не выбран вид документа.");
 
-                DateTime documentDate;
+                // В оригинальном операторе один created_at используется одновременно для
+                // atf_FileInfo.DateDoc и atf_FileAttachment.DateCreate.
+                DateTime createdAt;
                 string rawDate = (context.Request.Form["documentDate"] ?? "").Trim();
                 if (String.IsNullOrWhiteSpace(rawDate))
                 {
-                    documentDate = DateTime.Today;
+                    createdAt = DateTime.Now;
                 }
-                else if (!DateTime.TryParseExact(rawDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
-                    DateTimeStyles.None, out documentDate))
+                else
                 {
-                    throw new HttpException(400, "Некорректная дата документа.");
+                    DateTime selectedDate;
+                    if (!DateTime.TryParseExact(rawDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out selectedDate))
+                        throw new HttpException(400, "Некорректная дата документа.");
+
+                    createdAt = selectedDate.Date.Add(DateTime.Now.TimeOfDay);
                 }
 
                 string description = (context.Request.Form["description"] ?? "").Trim();
@@ -71,34 +80,41 @@ namespace PatientFiles
                     throw new HttpException(400, ex.Message);
                 }
 
-                // В существующем файловом хранилище имена файлов имеют UUID-вид.
-                // GUID самой записи atf_FileAttachment оставляем БД — там настроен штатный default newsequentialid().
-                Guid storageFileGuid = Guid.NewGuid();
-                finalPath = FileSecurity.BuildUploadPath(storageFileGuid, extension);
-                tempPath = finalPath + ".uploading";
+                // Получаем ровно те параметры, которые использует LocalFileToMkabAttachOperator:
+                // UGUID пациента, rf_DescTypeGuid и базовый путь из x_UserSettings.
+                UploadPreparationDto prep = Repository.PrepareUpload(mkabId, fileTypeId);
 
-                Directory.CreateDirectory(Path.GetDirectoryName(finalPath));
+                // Оригинальный оператор: uuid4 + исходное расширение.
+                Guid storageFileGuid = Guid.NewGuid();
+                string dbPath = FileSecurity.BuildStorageDbPath(prep.storageRoot, storageFileGuid, extension);
+                physicalFinalPath = FileSecurity.ResolveUploadTarget(dbPath);
+                tempPath = physicalFinalPath + ".uploading";
+
+                string directory = Path.GetDirectoryName(physicalFinalPath);
+                if (!String.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+
                 using (var input = posted.InputStream)
-                using (var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.SequentialScan))
+                using (var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                    64 * 1024, FileOptions.SequentialScan))
                 {
                     input.CopyTo(output, 64 * 1024);
                     output.Flush();
                 }
 
-                // Переименование внутри одной SMB-шары атомарнее, чем писать сразу в окончательное имя.
-                File.Move(tempPath, finalPath);
+                // В отличие от Airflow-оператора сначала пишем во временное имя и затем атомарно
+                // переименовываем на той же шаре. В БД попадает только окончательное UUID-имя.
+                File.Move(tempPath, physicalFinalPath);
                 tempPath = null;
 
                 int createUserId = ReadIntSetting("UploadCreateUserId", 1, 0, Int32.MaxValue);
-                string createUserName = (ConfigurationManager.AppSettings["UploadCreateUserName"] ?? "Веб-модуль").Trim();
+                string createUserName = (ConfigurationManager.AppSettings["UploadCreateUserName"] ?? "Администратор").Trim();
                 if (createUserName.Length > 255) createUserName = createUserName.Substring(0, 255);
 
                 UploadResultDto result = Repository.AttachFile(
-                    mkabId,
-                    fileTypeId,
-                    documentDate,
+                    prep,
+                    createdAt,
                     description,
-                    finalPath,
+                    dbPath,
                     createUserId,
                     createUserName);
 
@@ -117,14 +133,14 @@ namespace PatientFiles
             }
             catch (HttpException ex)
             {
-                CleanupUncommittedFile(tempPath, finalPath, dbCommitted);
+                CleanupUncommittedFile(tempPath, physicalFinalPath, dbCommitted);
                 context.Response.StatusCode = ex.GetHttpCode();
                 context.Response.TrySkipIisCustomErrors = true;
                 context.Response.Write(js.Serialize(new { ok = false, error = ex.Message }));
             }
             catch (Exception ex)
             {
-                CleanupUncommittedFile(tempPath, finalPath, dbCommitted);
+                CleanupUncommittedFile(tempPath, physicalFinalPath, dbCommitted);
                 AuditLog.Error(context, ex);
                 context.Response.StatusCode = 500;
                 context.Response.TrySkipIisCustomErrors = true;
@@ -143,6 +159,12 @@ namespace PatientFiles
             if (value < min) value = min;
             if (value > max) value = max;
             return value;
+        }
+
+        private static bool ReadBoolSetting(string key, bool fallback)
+        {
+            bool value;
+            return Boolean.TryParse(ConfigurationManager.AppSettings[key], out value) ? value : fallback;
         }
 
         private static void CleanupUncommittedFile(string tempPath, string finalPath, bool dbCommitted)

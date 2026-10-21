@@ -173,18 +173,99 @@ WHERE aFA.FileAttachmentID = @ID
             }
         }
 
+        // Повторяет параметры, которые LocalFileToMkabAttachOperator получает перед созданием записей:
+        // UGUID МКАБ, rf_DescTypeGuid для hlt_MKAB и путь хранилища из x_UserSettings.
+        public static UploadPreparationDto PrepareUpload(int mkabId, int fileTypeId)
+        {
+            using (var cn = Db.OpenWrite())
+            {
+                Guid mkabGuid;
+                using (var cmd = new SqlCommand(@"
+SELECT TOP (1) m.UGUID
+FROM dbo.hlt_MKAB m
+WHERE m.MKABID = @MKABID;", cn))
+                {
+                    cmd.Parameters.Add("@MKABID", SqlDbType.Int).Value = mkabId;
+                    object value = cmd.ExecuteScalar();
+                    if (value == null || value == DBNull.Value)
+                        throw new InvalidOperationException("Пациент с указанным MKABID не найден.");
+                    mkabGuid = (Guid)value;
+                }
+
+                string fileTypeName;
+                string fileTypeCode;
+                using (var cmd = new SqlCommand(@"
+SELECT TOP (1) ft.Name, ft.Code
+FROM dbo.atf_FileType ft
+WHERE ft.FileTypeID = @FileTypeID
+  AND ISNULL(ft.x_Status, 1) = 1
+  AND ISNULL(ft.DateBegin, CONVERT(datetime, '19000101', 112)) <= GETDATE()
+  AND ISNULL(ft.DateEnd, CONVERT(datetime, '22220101', 112)) >= CONVERT(date, GETDATE());", cn))
+                {
+                    cmd.Parameters.Add("@FileTypeID", SqlDbType.Int).Value = fileTypeId;
+                    using (var rd = cmd.ExecuteReader())
+                    {
+                        if (!rd.Read())
+                            throw new InvalidOperationException("Выбранный вид документа не найден или неактивен.");
+                        fileTypeName = rd.IsDBNull(0) ? "" : rd.GetString(0);
+                        fileTypeCode = rd.IsDBNull(1) ? "" : rd.GetString(1);
+                    }
+                }
+
+                Guid descTypeGuid;
+                using (var cmd = new SqlCommand(@"
+SELECT TOP (1) Guid
+FROM dbo.x_DocTypeDef
+WHERE HeadTable = 'hlt_MKAB'
+ORDER BY Guid ASC;", cn))
+                {
+                    object value = cmd.ExecuteScalar();
+                    if (value == null || value == DBNull.Value)
+                        throw new InvalidOperationException("В x_DocTypeDef не найден тип документа для hlt_MKAB.");
+                    descTypeGuid = (Guid)value;
+                }
+
+                string storageRoot;
+                using (var cmd = new SqlCommand(@"
+SELECT TOP (1) ValueStr
+FROM dbo.x_UserSettings
+WHERE Property = N'Путь к хранилищу прикреплённых файлов';", cn))
+                {
+                    object value = cmd.ExecuteScalar();
+                    storageRoot = value == null || value == DBNull.Value ? "" : Convert.ToString(value);
+                    if (String.IsNullOrWhiteSpace(storageRoot))
+                        throw new InvalidOperationException("В x_UserSettings не настроен путь к хранилищу прикреплённых файлов.");
+                }
+
+                return new UploadPreparationDto
+                {
+                    mkabId = mkabId,
+                    mkabGuid = mkabGuid,
+                    fileTypeId = fileTypeId,
+                    fileTypeCode = fileTypeCode,
+                    fileTypeName = fileTypeName,
+                    descTypeGuid = descTypeGuid,
+                    storageRoot = storageRoot
+                };
+            }
+        }
+
+        // Логика ниже повторяет LocalFileToMkabAttachOperator:
+        // 1) FileInfo MERGE по типу + rf_DescTypeGuid + МКАБ + календарной дате;
+        // 2) Attachment MERGE по FileInfoID + Path;
+        // 3) Num = количество уже существующих вложений у этого FileInfo.
         public static UploadResultDto AttachFile(
-            int mkabId,
-            int fileTypeId,
-            DateTime documentDate,
+            UploadPreparationDto prep,
+            DateTime createdAt,
             string description,
-            string path,
+            string dbPath,
             int createUserId,
             string createUserName)
         {
-            if (String.IsNullOrWhiteSpace(path))
-                throw new ArgumentException("Не задан путь к файлу.", "path");
-            if (path.Length > 500)
+            if (prep == null) throw new ArgumentNullException("prep");
+            if (String.IsNullOrWhiteSpace(dbPath))
+                throw new ArgumentException("Не задан путь к файлу.", "dbPath");
+            if (dbPath.Length > 500)
                 throw new InvalidOperationException("Путь к файлу длиннее 500 символов и не помещается в atf_FileAttachment.Path.");
 
             description = description ?? "";
@@ -195,90 +276,85 @@ WHERE aFA.FileAttachmentID = @ID
             {
                 try
                 {
-                    Guid mkabGuid;
-                    using (var cmd = new SqlCommand(@"
-SELECT TOP (1) m.UGUID
-FROM dbo.hlt_MKAB m
-WHERE m.MKABID = @MKABID;", cn, tx))
-                    {
-                        cmd.Parameters.Add("@MKABID", SqlDbType.Int).Value = mkabId;
-                        object value = cmd.ExecuteScalar();
-                        if (value == null || value == DBNull.Value)
-                            throw new InvalidOperationException("Пациент с указанным MKABID не найден.");
-                        mkabGuid = (Guid)value;
-                    }
-
-                    string fileTypeName;
-                    string fileTypeCode;
-                    using (var cmd = new SqlCommand(@"
-SELECT TOP (1) ft.Name, ft.Code
-FROM dbo.atf_FileType ft
-WHERE ft.FileTypeID = @FileTypeID
-  AND ISNULL(ft.x_Status, 1) = 1
-  AND ISNULL(ft.DateBegin, CONVERT(datetime, '19000101', 112)) <= GETDATE()
-  AND ISNULL(ft.DateEnd, CONVERT(datetime, '22220101', 112)) >= CONVERT(date, GETDATE());", cn, tx))
-                    {
-                        cmd.Parameters.Add("@FileTypeID", SqlDbType.Int).Value = fileTypeId;
-                        using (var rd = cmd.ExecuteReader())
-                        {
-                            if (!rd.Read())
-                                throw new InvalidOperationException("Выбранный вид документа не найден или неактивен.");
-                            fileTypeName = rd.IsDBNull(0) ? "" : rd.GetString(0);
-                            fileTypeCode = rd.IsDBNull(1) ? "" : rd.GetString(1);
-                        }
-                    }
-
                     int fileInfoId;
                     using (var cmd = new SqlCommand(@"
-INSERT INTO dbo.atf_FileInfo
+MERGE dbo.atf_FileInfo WITH (HOLDLOCK) AS target
+USING
 (
-    rf_FileTypeID,
-    DateDoc,
-    DescGuid,
-    Description
-)
-VALUES
-(
-    @FileTypeID,
-    @DateDoc,
-    @DescGuid,
-    @Description
-);
-SELECT CONVERT(int, SCOPE_IDENTITY());", cn, tx))
+    SELECT @FileTypeID AS rf_FileTypeID,
+           @DescTypeGuid AS rf_DescTypeGuid,
+           @MkabGuid AS DescGuid,
+           @CreatedAt AS DateDoc
+) AS source
+ON target.rf_FileTypeID = source.rf_FileTypeID
+   AND target.rf_DescTypeGuid = source.rf_DescTypeGuid
+   AND target.DescGuid = source.DescGuid
+   AND CAST(target.DateDoc AS date) = CAST(source.DateDoc AS date)
+WHEN NOT MATCHED THEN
+    INSERT (rf_FileTypeID, rf_DescTypeGuid, DescGuid, DateDoc)
+    VALUES (source.rf_FileTypeID, source.rf_DescTypeGuid, source.DescGuid, source.DateDoc);
+
+SELECT TOP (1) FileInfoID
+FROM dbo.atf_FileInfo
+WHERE rf_FileTypeID = @FileTypeID
+  AND rf_DescTypeGuid = @DescTypeGuid
+  AND DescGuid = @MkabGuid
+  AND CAST(DateDoc AS date) = CAST(@CreatedAt AS date)
+ORDER BY FileInfoID;", cn, tx))
                     {
-                        cmd.Parameters.Add("@FileTypeID", SqlDbType.Int).Value = fileTypeId;
-                        cmd.Parameters.Add("@DateDoc", SqlDbType.DateTime).Value = documentDate;
-                        cmd.Parameters.Add("@DescGuid", SqlDbType.UniqueIdentifier).Value = mkabGuid;
-                        cmd.Parameters.Add("@Description", SqlDbType.VarChar, -1).Value = description;
-                        fileInfoId = Convert.ToInt32(cmd.ExecuteScalar());
+                        cmd.Parameters.Add("@FileTypeID", SqlDbType.Int).Value = prep.fileTypeId;
+                        cmd.Parameters.Add("@DescTypeGuid", SqlDbType.UniqueIdentifier).Value = prep.descTypeGuid;
+                        cmd.Parameters.Add("@MkabGuid", SqlDbType.UniqueIdentifier).Value = prep.mkabGuid;
+                        cmd.Parameters.Add("@CreatedAt", SqlDbType.DateTime).Value = createdAt;
+                        object value = cmd.ExecuteScalar();
+                        if (value == null || value == DBNull.Value)
+                            throw new InvalidOperationException("Не удалось получить FileInfoID после MERGE atf_FileInfo.");
+                        fileInfoId = Convert.ToInt32(value);
                     }
 
                     int attachmentId;
                     using (var cmd = new SqlCommand(@"
-INSERT INTO dbo.atf_FileAttachment
+MERGE dbo.atf_FileAttachment WITH (HOLDLOCK) AS target
+USING
 (
-    rf_FileInfoID,
-    Path,
-    rf_CreateUserID,
-    CreateUserName,
-    Description
-)
-VALUES
-(
-    @FileInfoID,
-    @Path,
-    @CreateUserID,
-    @CreateUserName,
-    @Description
-);
-SELECT CONVERT(int, SCOPE_IDENTITY());", cn, tx))
+    SELECT @FileInfoID AS rf_FileInfoID,
+           @Path AS Path,
+           @CreateUserID AS rf_CreateUserID,
+           @CreateUserName AS CreateUserName,
+           @Description AS Description,
+           @CreatedAt AS DateCreate
+) AS source
+ON target.rf_FileInfoID = source.rf_FileInfoID
+   AND target.Path = source.Path
+WHEN NOT MATCHED THEN
+    INSERT (rf_CreateUserID, CreateUserName, rf_FileInfoID, Path, Description, DateCreate, Num)
+    VALUES
+    (
+        source.rf_CreateUserID,
+        source.CreateUserName,
+        source.rf_FileInfoID,
+        source.Path,
+        source.Description,
+        source.DateCreate,
+        (SELECT COUNT(*) FROM dbo.atf_FileAttachment A2 WHERE A2.rf_FileInfoID = source.rf_FileInfoID)
+    );
+
+SELECT TOP (1) FileAttachmentID
+FROM dbo.atf_FileAttachment
+WHERE rf_FileInfoID = @FileInfoID
+  AND Path = @Path
+ORDER BY FileAttachmentID;", cn, tx))
                     {
                         cmd.Parameters.Add("@FileInfoID", SqlDbType.Int).Value = fileInfoId;
-                        cmd.Parameters.Add("@Path", SqlDbType.VarChar, 500).Value = path;
+                        cmd.Parameters.Add("@Path", SqlDbType.VarChar, 500).Value = dbPath;
                         cmd.Parameters.Add("@CreateUserID", SqlDbType.Int).Value = createUserId;
                         cmd.Parameters.Add("@CreateUserName", SqlDbType.VarChar, 255).Value = createUserName;
                         cmd.Parameters.Add("@Description", SqlDbType.VarChar, -1).Value = description;
-                        attachmentId = Convert.ToInt32(cmd.ExecuteScalar());
+                        cmd.Parameters.Add("@CreatedAt", SqlDbType.DateTime).Value = createdAt;
+                        object value = cmd.ExecuteScalar();
+                        if (value == null || value == DBNull.Value)
+                            throw new InvalidOperationException("Не удалось получить FileAttachmentID после MERGE atf_FileAttachment.");
+                        attachmentId = Convert.ToInt32(value);
                     }
 
                     tx.Commit();
@@ -286,8 +362,8 @@ SELECT CONVERT(int, SCOPE_IDENTITY());", cn, tx))
                     {
                         attachmentId = attachmentId,
                         fileInfoId = fileInfoId,
-                        fileType = fileTypeName,
-                        fileTypeCode = fileTypeCode
+                        fileType = prep.fileTypeName,
+                        fileTypeCode = prep.fileTypeCode
                     };
                 }
                 catch

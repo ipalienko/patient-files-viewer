@@ -60,7 +60,7 @@ hlt_MKAB.MKABID
 - доступ к SMB-хранилищу файлов;
 - Application Pool: `.NET CLR v4.0`, `Integrated`;
 - сервисная учётная запись пула с правом чтения SMB и записи в `App_Data/Logs`;
-- для функции прикрепления файлов этой же учётной записи нужны права создания/удаления файлов в `UploadRoot`.
+- для функции прикрепления файлов этой же учётной записи нужны права создания/записи/переименования/удаления в фактическом хранилище из `x_UserSettings`.
 
 ### Для сборки browser-viewer
 
@@ -94,7 +94,7 @@ Copy-Item .\web.config.example .\web.config
 - `DB_USER` / `DB_PASSWORD` — SQL-реквизиты read-only подключения `MisDb`;
 - `DB_WRITE_USER` / `DB_WRITE_PASSWORD` — отдельные SQL-реквизиты для `MisWriteDb`, используемые только при прикреплении файлов;
 - `\\FILE_SERVER\SHARE_ROOT` — разрешённый SMB-корень;
-- `UploadRoot` — каталог, куда модуль будет сохранять новые файлы. Он должен находиться внутри `AllowedRoots`;
+- `UploadEnabled` — отдельный выключатель функции прикрепления;
 - `UploadCreateUserId` / `UploadCreateUserName` — технический пользователь, который будет записан в `atf_FileAttachment`.
 
 Если используется Windows Integrated Security для SQL, замените SQL Authentication в соответствующей connection string на `Integrated Security=True`.
@@ -176,7 +176,18 @@ dbo.atf_FileAttachment
 dbo.atf_FileType
 ```
 
-Подключение `MisWriteDb` для прикрепления файлов должно иметь `SELECT` на `hlt_MKAB` и `atf_FileType`, а также `INSERT` на:
+Подключение `MisWriteDb` для прикрепления файлов должно иметь `SELECT` на:
+
+```text
+dbo.hlt_MKAB
+dbo.atf_FileType
+dbo.x_DocTypeDef
+dbo.x_UserSettings
+dbo.atf_FileInfo
+dbo.atf_FileAttachment
+```
+
+и `INSERT` на:
 
 ```text
 dbo.atf_FileInfo
@@ -209,7 +220,7 @@ http://WEB_SERVER:PORT/?mkabid=123456
 
 Перед первой записью в рабочую БД рекомендуется выполнить `Sql/04_verify_attachment_convention.sql` на МКАБ, куда файл недавно был прикреплён штатно через десктопную МИС. Скрипт только читает данные и помогает сверить фактическое соглашение об именовании файлов.
 
-Для теста загрузки используйте отдельного пациента/тестовую карту: выберите файл, вид документа и дату, после чего убедитесь, что одновременно появились физический файл в `UploadRoot` и две связанные записи в `atf_FileInfo` / `atf_FileAttachment`.
+Для теста загрузки используйте отдельного пациента/тестовую карту: выберите файл, вид документа и дату, после чего убедитесь, что физический файл появился в хранилище, указанном в `x_UserSettings`, а связанные записи корректно появились/переиспользовались в `atf_FileInfo` и `atf_FileAttachment`.
 
 ## Конфигурация
 
@@ -243,17 +254,22 @@ X:\=>\\FILE_SERVER\SHARE_ROOT
 
 Максимальный размер файла для передачи в browser-viewer. Скачивание оригинала этим лимитом не ограничивается.
 
-### `UploadRoot`
+### Путь хранения новых файлов
 
-Каталог для новых файлов. Должен быть абсолютным локальным/UNC-путём и находиться внутри одного из `AllowedRoots`.
-
-Новый файл получает имя вида:
+Отдельный `UploadRoot` не используется. Как и `LocalFileToMkabAttachOperator`, модуль читает базовый путь из:
 
 ```text
-<uuid>.<исходное расширение>
+dbo.x_UserSettings
+Property = N'Путь к хранилищу прикреплённых файлов'
 ```
 
-Сначала файл пишется во временное имя `.uploading`, затем переименовывается в окончательное. Только после этого создаются записи в БД. Если SQL-транзакция завершается ошибкой, физический файл удаляется.
+Имя нового файла — `<uuid4>.<исходное расширение>`. В БД сохраняется путь `<ValueStr>\<uuid>.<ext>`. Для физического доступа IIS может применяться `PathMappings`; итоговый путь обязан находиться внутри `AllowedRoots`.
+
+Сначала файл пишется во временное имя `.uploading`, затем переименовывается в окончательное UUID-имя. При ошибке до успешной записи в БД физический файл удаляется.
+
+### `UploadEnabled`
+
+По умолчанию `false`. После выдачи SQL/SMB-прав и проверки на тестовой МКАБ установите `true`.
 
 ### `MaxUploadSizeMb`
 
@@ -268,9 +284,9 @@ X:\=>\\FILE_SERVER\SHARE_ROOT
 - браузер не получает UNC-путь;
 - `File.ashx` принимает идентификатор файла и повторно проверяет его принадлежность `MKABID`;
 - путь проходит allow-list `AllowedRoots`;
-- `UploadRoot` также обязан находиться внутри `AllowedRoots`;
+- путь хранилища из `x_UserSettings` после `PathMappings` обязан находиться внутри `AllowedRoots`;
 - вид документа для загрузки выбирается только по существующему активному `FileTypeID`, а не принимается произвольной строкой от браузера;
-- создание `atf_FileInfo` и `atf_FileAttachment` выполняется в одной SQL-транзакции;
+- `atf_FileInfo` и `atf_FileAttachment` создаются через `MERGE` по тем же ключам, что и в `LocalFileToMkabAttachOperator`;
 - разрешены только неисполняемые расширения;
 - макросы Office-документов не выполняются;
 - ответы содержат `no-store`;
@@ -303,3 +319,7 @@ window.open('/?mkabid=' + encodeURIComponent(mkabid), '_blank', 'noopener');
 - ShrimpDocViewer — MIT OR Apache-2.0.
 
 При сборке доступные license/notices копируются в `ViewerDist/licenses`.
+
+## Механизм прикрепления
+
+Реализация повторяет `LocalFileToMkabAttachOperator`: путь хранилища читается из `dbo.x_UserSettings`, `rf_DescTypeGuid` — из `dbo.x_DocTypeDef`, физическое имя генерируется как UUID4 + расширение, `atf_FileInfo` переиспользуется по пациенту/типу/дате, а `atf_FileAttachment` создаётся по `FileInfoID + Path` с заполнением `Num`. Веб-интерфейс намеренно не создаёт новые `atf_FileType`: пользователь выбирает существующий активный тип МИС.

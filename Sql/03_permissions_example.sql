@@ -1,31 +1,30 @@
 /*
-  Рекомендуемая схема прав:
+  ШАБЛОН минимальных прав для функции просмотра и прикрепления.
+  Все имена учётных записей и базы ниже условные.
 
-  1) MisDb — существующая read-only учётная запись для просмотра.
-  2) MisWriteDb — отдельная минимально-привилегированная учётная запись только для прикрепления файлов.
-
-  Все имена ниже условные. Перед применением согласуйте с DBA.
+  Рекомендуется использовать две учётные записи:
+  1) read-only для MisDb;
+  2) отдельную для MisWriteDb.
 */
 
--- ===== READ-ONLY account: MisDb =====
--- GRANT SELECT ON dbo.hlt_MKAB TO [READ_ACCOUNT];
--- GRANT SELECT ON dbo.atf_FileInfo TO [READ_ACCOUNT];
--- GRANT SELECT ON dbo.atf_FileAttachment TO [READ_ACCOUNT];
--- GRANT SELECT ON dbo.atf_FileType TO [READ_ACCOUNT];
+-- Пример для MisWriteDb (Windows Login):
+-- CREATE LOGIN [DOMAIN\SERVICE_ACCOUNT] FROM WINDOWS;
+-- GO
+-- USE [YOUR_DATABASE];
+-- GO
+-- CREATE USER [DOMAIN\SERVICE_ACCOUNT] FOR LOGIN [DOMAIN\SERVICE_ACCOUNT];
 -- GO
 
--- ===== WRITE account: MisWriteDb =====
--- Для проверки пациента и выбранного типа файла:
--- GRANT SELECT ON dbo.hlt_MKAB TO [WRITE_ACCOUNT];
--- GRANT SELECT ON dbo.atf_FileType TO [WRITE_ACCOUNT];
+-- Чтение параметров и проверка пациента/типа файла:
+-- GRANT SELECT ON dbo.hlt_MKAB TO [DOMAIN\SERVICE_ACCOUNT];
+-- GRANT SELECT ON dbo.atf_FileType TO [DOMAIN\SERVICE_ACCOUNT];
+-- GRANT SELECT ON dbo.x_DocTypeDef TO [DOMAIN\SERVICE_ACCOUNT];
+-- GRANT SELECT ON dbo.x_UserSettings TO [DOMAIN\SERVICE_ACCOUNT];
 
--- Для создания связки файла:
--- GRANT INSERT ON dbo.atf_FileInfo TO [WRITE_ACCOUNT];
--- GRANT INSERT ON dbo.atf_FileAttachment TO [WRITE_ACCOUNT];
+-- MERGE + последующий SELECT FileInfoID/FileAttachmentID:
+-- GRANT SELECT, INSERT ON dbo.atf_FileInfo TO [DOMAIN\SERVICE_ACCOUNT];
+-- GRANT SELECT, INSERT ON dbo.atf_FileAttachment TO [DOMAIN\SERVICE_ACCOUNT];
 -- GO
 
-/*
-  UPDATE/DELETE приложению для загрузки не нужны.
-  Если триггеры МИС требуют дополнительных прав, это будет видно при тестовой вставке;
-  не выдавайте db_owner/db_datawriter целиком без необходимости.
-*/
+-- UPDATE и DELETE модулю прикрепления не требуются.
+-- Новые atf_FileType веб-модуль не создаёт: пользователь выбирает существующий тип.

@@ -8,8 +8,6 @@ namespace PatientFiles
 {
     internal static class FileSecurity
     {
-        // Только документы, которые разрешено отдавать из МИС пользователю.
-        // Неисполняемые форматы. XPS разрешён для скачивания, но текущий viewer его не показывает.
         private static readonly HashSet<string> AllowedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             ".pdf",
@@ -32,45 +30,48 @@ namespace PatientFiles
             return ext;
         }
 
-        public static string BuildUploadPath(Guid attachmentGuid, string extension)
+        // LocalFileToMkabAttachOperator кладёт файл в корень Samba под именем UUID.ext,
+        // а в БД сохраняет <x_UserSettings.ValueStr>\UUID.ext.
+        public static string BuildStorageDbPath(string storageRoot, Guid fileGuid, string extension)
         {
-            if (attachmentGuid == Guid.Empty)
-                throw new ArgumentException("Не задан GUID файла.", "attachmentGuid");
+            if (fileGuid == Guid.Empty)
+                throw new ArgumentException("Не задан GUID файла.", "fileGuid");
 
             extension = (extension ?? "").ToLowerInvariant();
             if (!AllowedExtensions.Contains(extension))
                 throw new InvalidOperationException("Формат файла не разрешён для прикрепления: " + extension);
 
-            string configured = ConfigurationManager.AppSettings["UploadRoot"] ?? "";
-            if (String.IsNullOrWhiteSpace(configured))
-                throw new InvalidOperationException("UploadRoot не настроен.");
+            if (String.IsNullOrWhiteSpace(storageRoot))
+                throw new InvalidOperationException("В МИС не настроен путь к хранилищу прикреплённых файлов.");
 
-            string uploadRoot = NormalizeRoot(configured);
-            if (String.IsNullOrWhiteSpace(uploadRoot))
-                throw new InvalidOperationException("UploadRoot должен быть абсолютным локальным или UNC-путём.");
+            string fileName = fileGuid.ToString("D").ToLowerInvariant() + extension;
+            return storageRoot.Trim().Trim('"').TrimEnd('\\') + "\\" + fileName;
+        }
 
-            var roots = GetAllowedRoots();
-            if (roots.Length == 0)
-                throw new InvalidOperationException("AllowedRoots не настроен.");
+        // Превращает путь, который будет записан в БД, в физический путь для IIS.
+        // Если в окружении путь отличается, используется PathMappings.
+        public static string ResolveUploadTarget(string dbPath)
+        {
+            if (String.IsNullOrWhiteSpace(dbPath))
+                throw new InvalidOperationException("Не задан путь к создаваемому файлу.");
 
-            bool allowed = roots.Any(r =>
+            string path = Environment.ExpandEnvironmentVariables(dbPath.Trim().Trim('"'));
+            path = ApplyMappings(path);
+
+            if (!Path.IsPathRooted(path))
             {
-                string bare = r.TrimEnd('\\');
-                string uploadBare = uploadRoot.TrimEnd('\\');
-                return uploadBare.Equals(bare, StringComparison.OrdinalIgnoreCase) ||
-                       uploadRoot.StartsWith(r, StringComparison.OrdinalIgnoreCase);
-            });
+                string root = ConfigurationManager.AppSettings["FileRoot"] ?? "";
+                if (String.IsNullOrWhiteSpace(root))
+                    throw new InvalidOperationException("Путь хранилища МИС относительный, но FileRoot не настроен.");
+                path = Path.Combine(root, path);
+            }
 
-            if (!allowed)
-                throw new UnauthorizedAccessException("UploadRoot находится вне AllowedRoots.");
+            path = Path.GetFullPath(path);
+            string ext = Path.GetExtension(path);
+            if (!AllowedExtensions.Contains(ext))
+                throw new InvalidOperationException("Формат файла не разрешён для прикрепления: " + ext);
 
-            string fileName = attachmentGuid.ToString("D").ToLowerInvariant() + extension;
-            string path = Path.GetFullPath(Path.Combine(uploadRoot, fileName));
-
-            // Повторная проверка после Path.Combine/GetFullPath.
-            if (!path.StartsWith(uploadRoot, StringComparison.OrdinalIgnoreCase))
-                throw new UnauthorizedAccessException("Некорректный путь для загрузки файла.");
-
+            EnsureAllowedRoot(path);
             return path;
         }
 
@@ -84,19 +85,28 @@ namespace PatientFiles
 
             if (!Path.IsPathRooted(path))
             {
-                var root = ConfigurationManager.AppSettings["FileRoot"] ?? "";
+                string root = ConfigurationManager.AppSettings["FileRoot"] ?? "";
                 if (String.IsNullOrWhiteSpace(root))
                     throw new InvalidOperationException("В БД хранится относительный путь, но FileRoot не настроен.");
                 path = Path.Combine(root, path);
             }
 
             path = Path.GetFullPath(path);
-            var ext = Path.GetExtension(path);
+            string ext = Path.GetExtension(path);
             if (!AllowedExtensions.Contains(ext))
                 throw new InvalidOperationException("Формат файла не разрешён для выдачи: " + ext);
 
-            var roots = GetAllowedRoots();
+            EnsureAllowedRoot(path);
 
+            if (!File.Exists(path))
+                throw new FileNotFoundException("Файл отсутствует на файловом сервере.", path);
+
+            return path;
+        }
+
+        private static void EnsureAllowedRoot(string path)
+        {
+            string[] roots = GetAllowedRoots();
             if (roots.Length == 0)
                 throw new InvalidOperationException("AllowedRoots не настроен.");
 
@@ -109,11 +119,6 @@ namespace PatientFiles
 
             if (!allowed)
                 throw new UnauthorizedAccessException("Путь файла находится вне разрешённых каталогов.");
-
-            if (!File.Exists(path))
-                throw new FileNotFoundException("Файл отсутствует на файловом сервере.", path);
-
-            return path;
         }
 
         private static string[] GetAllowedRoots()
@@ -135,8 +140,7 @@ namespace PatientFiles
             return root + "\\";
         }
 
-        // Пример в web.config:
-        // X:\=>\\FILE_SERVER\SHARE_ROOT|Y:\old\=>\\FILE_SERVER\ARCHIVE_ROOT\
+        // Пример: X:\=>\\FILE_SERVER\SHARE_ROOT|Y:\old\=>\\FILE_SERVER\ARCHIVE_ROOT\
         private static string ApplyMappings(string path)
         {
             string raw = ConfigurationManager.AppSettings["PathMappings"] ?? "";

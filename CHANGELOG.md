@@ -1,4 +1,14 @@
-# Changelog
+## 1.1.1 — 2026-10-21
+
+- прикрепление приведено к механизму `LocalFileToMkabAttachOperator`;
+- путь хранения берётся из `x_UserSettings`;
+- `rf_DescTypeGuid` берётся из `x_DocTypeDef`;
+- `atf_FileInfo` переиспользуется по типу/МКАБ/дате через `MERGE`;
+- `atf_FileAttachment` создаётся через `MERGE`, заполняется `Num`;
+- физическое имя файла — UUID4 + расширение;
+- запись файлов выключена по умолчанию через `UploadEnabled=false`.
+
+﻿# Changelog
 
 ## 1.1.0 — 2026-10-21
 

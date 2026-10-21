@@ -1,0 +1,61 @@
+PatientFiles 1.1.1 — прикрепление по схеме LocalFileToMkabAttachOperator
+=====================================================================
+
+Эта версия исправляет тестовую 1.1.0 после изучения исходника LocalFileToMkabAttachOperator.
+1.1.0 для записи в рабочую БД не использовать.
+
+Что теперь повторяется из штатного оператора
+-------------------------------------------
+1. Имя файла: UUID4 + исходное расширение.
+2. Базовый путь Path берётся из dbo.x_UserSettings, Property =
+   N'Путь к хранилищу прикреплённых файлов'.
+3. rf_DescTypeGuid берётся из dbo.x_DocTypeDef для HeadTable='hlt_MKAB'.
+4. atf_FileInfo создаётся/переиспользуется через MERGE по:
+   rf_FileTypeID + rf_DescTypeGuid + DescGuid + календарной дате DateDoc.
+5. atf_FileAttachment создаётся через MERGE по rf_FileInfoID + Path.
+6. Num = COUNT(*) уже имеющихся вложений у выбранного FileInfoID.
+7. Description записывается в atf_FileAttachment.
+8. Один createdAt записывается и в DateDoc, и в DateCreate.
+9. При ошибке до фиксации БД физический файл удаляется.
+
+Осознанное отличие
+------------------
+Веб-модуль НЕ создаёт новые atf_FileType. Пользователь выбирает существующий активный
+вид документа из МИС. Это безопаснее для интерактивного интерфейса и не меняет
+механизм самого прикрепления.
+
+Дополнительное улучшение веб-модуля
+----------------------------------
+Файл сначала пишется как <uuid>.<ext>.uploading, а затем переименовывается в окончательное
+UUID-имя на той же шаре. В БД временное имя никогда не записывается.
+
+Настройка web.config
+--------------------
+Добавить MisWriteDb и appSettings:
+
+  <add key="UploadEnabled" value="true" />
+  <add key="MaxUploadSizeMb" value="30" />
+  <add key="UploadCreateUserId" value="1" />
+  <add key="UploadCreateUserName" value="Администратор" />
+
+UploadRoot больше не нужен: путь берётся из БД, как у оператора.
+Путь из x_UserSettings должен попадать в AllowedRoots. Если реальный UNC на IIS отличается,
+используйте PathMappings.
+
+Права MisWriteDb
+----------------
+SELECT: dbo.hlt_MKAB, dbo.atf_FileType, dbo.x_DocTypeDef, dbo.x_UserSettings,
+        dbo.atf_FileInfo, dbo.atf_FileAttachment
+INSERT: dbo.atf_FileInfo, dbo.atf_FileAttachment
+
+На SMB identity Application Pool нужны Create/Write/Rename/Delete.
+
+Первый тест
+-----------
+Только на тестовой МКАБ. После прикрепления проверить:
+- имя физического файла имеет вид UUID.ext;
+- Path = значение x_UserSettings + UUID.ext;
+- FileInfo.rf_DescTypeGuid заполнен;
+- FileInfo может быть переиспользован для того же пациента/типа/даты;
+- Attachment.Num имеет последовательное значение 0,1,2...;
+- документ виден в веб-модуле и десктопной МИС.

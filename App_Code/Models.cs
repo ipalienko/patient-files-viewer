@@ -31,6 +31,17 @@ namespace PatientFiles
         public string name { get; set; }
     }
 
+    internal sealed class UploadPreparationDto
+    {
+        public int mkabId { get; set; }
+        public Guid mkabGuid { get; set; }
+        public int fileTypeId { get; set; }
+        public string fileTypeCode { get; set; }
+        public string fileTypeName { get; set; }
+        public Guid descTypeGuid { get; set; }
+        public string storageRoot { get; set; }
+    }
+
     public sealed class UploadResultDto
     {
         public int attachmentId { get; set; }

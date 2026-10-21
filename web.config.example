@@ -29,15 +29,18 @@
 
     <add key="MaxPreviewSizeMb" value="100" />
 
-    <!-- Каталог, куда веб-модуль сохраняет новые прикрепляемые файлы. Должен входить в AllowedRoots. -->
-    <add key="UploadRoot" value="\\FILE_SERVER\SHARE_ROOT" />
+    <!-- Функция записи выключена по умолчанию. После настройки прав включите на тестовом сервере. -->
+    <add key="UploadEnabled" value="false" />
+
+    <!-- Корень хранения для новых файлов берётся из x_UserSettings, как в LocalFileToMkabAttachOperator. -->
+    <!-- Если путь из БД физически доступен по другому UNC, настройте PathMappings выше. -->
 
     <!-- Лимит самого приложения. IIS также имеет собственный maxAllowedContentLength. -->
     <add key="MaxUploadSizeMb" value="30" />
 
     <!-- Так как текущий сайт работает анонимно, запись в МИС создаётся от технического пользователя. -->
     <add key="UploadCreateUserId" value="1" />
-    <add key="UploadCreateUserName" value="Веб-модуль" />
+    <add key="UploadCreateUserName" value="Администратор" />
   </appSettings>
 
   <system.web>
