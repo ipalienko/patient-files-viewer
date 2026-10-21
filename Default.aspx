@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Прикреплённые файлы пациента — Полимедика</title>
   <link rel="stylesheet" href="Content/site.css" />
-  <link rel="stylesheet" href="ViewerDist/viewer.css" />
 </head>
 <body>
   <div class="page-shell">
