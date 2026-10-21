@@ -8,9 +8,20 @@ namespace PatientFiles
     {
         public static SqlConnection Open()
         {
-            var cs = ConfigurationManager.ConnectionStrings["MisDb"];
+            return OpenByName("MisDb");
+        }
+
+        public static SqlConnection OpenWrite()
+        {
+            return OpenByName("MisWriteDb");
+        }
+
+        private static SqlConnection OpenByName(string name)
+        {
+            var cs = ConfigurationManager.ConnectionStrings[name];
             if (cs == null || String.IsNullOrWhiteSpace(cs.ConnectionString))
-                throw new InvalidOperationException("Не настроена строка подключения MisDb в web.config.");
+                throw new InvalidOperationException("Не настроена строка подключения " + name + " в web.config.");
+
             var cn = new SqlConnection(cs.ConnectionString);
             cn.Open();
             return cn;

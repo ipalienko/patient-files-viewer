@@ -25,12 +25,25 @@
   const downloadBtn = document.getElementById('downloadBtn');
   const fullscreenBtn = document.getElementById('fullscreenBtn');
   const printBtn = document.getElementById('printBtn');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const uploadModal = document.getElementById('uploadModal');
+  const uploadCloseBtn = document.getElementById('uploadCloseBtn');
+  const uploadCancelBtn = document.getElementById('uploadCancelBtn');
+  const uploadForm = document.getElementById('uploadForm');
+  const uploadFile = document.getElementById('uploadFile');
+  const uploadFileType = document.getElementById('uploadFileType');
+  const uploadDocumentDate = document.getElementById('uploadDocumentDate');
+  const uploadDescription = document.getElementById('uploadDescription');
+  const uploadStatus = document.getElementById('uploadStatus');
+  const uploadSubmitBtn = document.getElementById('uploadSubmitBtn');
 
   let files = [];
   let activeId = null;
   let activeFile = null;
   let viewerModulePromise = null;
   let requestSerial = 0;
+  let uploadTypesLoaded = false;
+  let uploadInProgress = false;
 
   const NATIVE_IMAGE = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.avif']);
   const SPLITTER_STORAGE_KEY = 'patientFiles.leftPanelWidth';
@@ -321,6 +334,139 @@
     }
   }
 
+  function todayIsoLocal() {
+    const d = new Date();
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 10);
+  }
+
+  function setUploadStatus(text, isError) {
+    uploadStatus.textContent = text || '';
+    uploadStatus.classList.toggle('hidden', !text);
+    uploadStatus.classList.toggle('error', !!isError);
+  }
+
+  async function loadUploadTypes() {
+    if (uploadTypesLoaded) return;
+
+    uploadFileType.disabled = true;
+    uploadFileType.innerHTML = '<option value="">Загрузка списка…</option>';
+
+    try {
+      const r = await fetch('Api.ashx?action=types', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
+      const data = await r.json();
+      if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+
+      const types = data.fileTypes || [];
+      uploadFileType.innerHTML = '<option value="">Выберите вид документа</option>' +
+        types.map(t => {
+          const label = (t.code ? '[' + t.code + '] ' : '') + (t.name || ('Тип ' + t.fileTypeId));
+          return '<option value="' + esc(t.fileTypeId) + '">' + esc(label) + '</option>';
+        }).join('');
+      uploadTypesLoaded = true;
+    } catch (e) {
+      uploadFileType.innerHTML = '<option value="">Не удалось загрузить список</option>';
+      setUploadStatus('Не удалось получить виды документов: ' + e.message, true);
+    } finally {
+      uploadFileType.disabled = false;
+    }
+  }
+
+  async function openUploadModal() {
+    if (!mkabid || !/^\d+$/.test(mkabid)) {
+      showError('Нельзя прикрепить файл: не передан корректный MKABID.');
+      return;
+    }
+
+    uploadForm.reset();
+    uploadDocumentDate.value = todayIsoLocal();
+    setUploadStatus('', false);
+    uploadModal.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+
+    await loadUploadTypes();
+    setTimeout(() => uploadFile.focus(), 0);
+  }
+
+  function closeUploadModal() {
+    if (uploadInProgress) return;
+    uploadModal.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+    setUploadStatus('', false);
+  }
+
+  async function submitUpload(e) {
+    e.preventDefault();
+    if (uploadInProgress) return;
+
+    const selectedFile = uploadFile.files && uploadFile.files[0];
+    if (!selectedFile) {
+      setUploadStatus('Выберите файл.', true);
+      return;
+    }
+    if (!uploadFileType.value) {
+      setUploadStatus('Выберите вид документа.', true);
+      return;
+    }
+
+    const fd = new FormData(uploadForm);
+    fd.set('mkabid', mkabid);
+
+    uploadInProgress = true;
+    uploadSubmitBtn.disabled = true;
+    uploadCancelBtn.disabled = true;
+    uploadCloseBtn.disabled = true;
+    uploadSubmitBtn.textContent = 'Прикрепление…';
+    setUploadStatus('Загрузка файла и запись в МИС…', false);
+
+    try {
+      const r = await fetch('Upload.ashx', {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
+
+      const raw = await r.text();
+      let data = null;
+      try { data = JSON.parse(raw); } catch (_) { }
+
+      if (!r.ok || !data || !data.ok) {
+        let error = data && data.error ? data.error : ('HTTP ' + r.status);
+        if (r.status === 413) {
+          error = 'Файл слишком большой. Проверьте MaxUploadSizeMb и лимит IIS maxAllowedContentLength.';
+        }
+        throw new Error(error);
+      }
+
+      setUploadStatus('Файл успешно прикреплён.', false);
+      const newAttachmentId = Number(data.attachmentId);
+
+      uploadInProgress = false;
+      uploadModal.classList.add('hidden');
+      document.body.classList.remove('modal-open');
+      filterInput.value = '';
+      await load();
+
+      const row = body.querySelector('tr[data-id="' + newAttachmentId + '"]');
+      if (row) {
+        row.scrollIntoView({ block: 'nearest' });
+        await openPreview(newAttachmentId, row);
+      }
+    } catch (e2) {
+      setUploadStatus('Не удалось прикрепить файл: ' + (e2 && e2.message ? e2.message : e2), true);
+    } finally {
+      uploadInProgress = false;
+      uploadSubmitBtn.disabled = false;
+      uploadCancelBtn.disabled = false;
+      uploadCloseBtn.disabled = false;
+      uploadSubmitBtn.textContent = 'Прикрепить';
+    }
+  }
+
   function initSplitter() {
     if (!workspace || !splitter) return;
 
@@ -490,6 +636,17 @@
   });
 
   printBtn.addEventListener('click', printCurrentDocument);
+
+  uploadBtn.addEventListener('click', openUploadModal);
+  uploadCloseBtn.addEventListener('click', closeUploadModal);
+  uploadCancelBtn.addEventListener('click', closeUploadModal);
+  uploadForm.addEventListener('submit', submitUpload);
+  uploadModal.addEventListener('click', e => {
+    if (e.target === uploadModal) closeUploadModal();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !uploadModal.classList.contains('hidden')) closeUploadModal();
+  });
 
   window.addEventListener('beforeunload', () => {
     void destroyViewerIfLoaded();

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
@@ -19,6 +19,60 @@ namespace PatientFiles
             ".ppt", ".pptx", ".pptm", ".ppsx", ".odp",
             ".odt", ".xps"
         };
+
+        public static string ValidateUploadExtension(string fileName)
+        {
+            if (String.IsNullOrWhiteSpace(fileName))
+                throw new InvalidOperationException("Не удалось определить имя файла.");
+
+            string ext = Path.GetExtension(fileName).ToLowerInvariant();
+            if (String.IsNullOrWhiteSpace(ext) || !AllowedExtensions.Contains(ext))
+                throw new InvalidOperationException("Формат файла не разрешён для прикрепления: " + (ext == "" ? "без расширения" : ext));
+
+            return ext;
+        }
+
+        public static string BuildUploadPath(Guid attachmentGuid, string extension)
+        {
+            if (attachmentGuid == Guid.Empty)
+                throw new ArgumentException("Не задан GUID файла.", "attachmentGuid");
+
+            extension = (extension ?? "").ToLowerInvariant();
+            if (!AllowedExtensions.Contains(extension))
+                throw new InvalidOperationException("Формат файла не разрешён для прикрепления: " + extension);
+
+            string configured = ConfigurationManager.AppSettings["UploadRoot"] ?? "";
+            if (String.IsNullOrWhiteSpace(configured))
+                throw new InvalidOperationException("UploadRoot не настроен.");
+
+            string uploadRoot = NormalizeRoot(configured);
+            if (String.IsNullOrWhiteSpace(uploadRoot))
+                throw new InvalidOperationException("UploadRoot должен быть абсолютным локальным или UNC-путём.");
+
+            var roots = GetAllowedRoots();
+            if (roots.Length == 0)
+                throw new InvalidOperationException("AllowedRoots не настроен.");
+
+            bool allowed = roots.Any(r =>
+            {
+                string bare = r.TrimEnd('\\');
+                string uploadBare = uploadRoot.TrimEnd('\\');
+                return uploadBare.Equals(bare, StringComparison.OrdinalIgnoreCase) ||
+                       uploadRoot.StartsWith(r, StringComparison.OrdinalIgnoreCase);
+            });
+
+            if (!allowed)
+                throw new UnauthorizedAccessException("UploadRoot находится вне AllowedRoots.");
+
+            string fileName = attachmentGuid.ToString("D").ToLowerInvariant() + extension;
+            string path = Path.GetFullPath(Path.Combine(uploadRoot, fileName));
+
+            // Повторная проверка после Path.Combine/GetFullPath.
+            if (!path.StartsWith(uploadRoot, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Некорректный путь для загрузки файла.");
+
+            return path;
+        }
 
         public static string ResolveAndValidate(string dbPath)
         {
@@ -41,11 +95,7 @@ namespace PatientFiles
             if (!AllowedExtensions.Contains(ext))
                 throw new InvalidOperationException("Формат файла не разрешён для выдачи: " + ext);
 
-            var roots = (ConfigurationManager.AppSettings["AllowedRoots"] ?? "")
-                .Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(NormalizeRoot)
-                .Where(x => !String.IsNullOrWhiteSpace(x))
-                .ToArray();
+            var roots = GetAllowedRoots();
 
             if (roots.Length == 0)
                 throw new InvalidOperationException("AllowedRoots не настроен.");
@@ -64,6 +114,15 @@ namespace PatientFiles
                 throw new FileNotFoundException("Файл отсутствует на файловом сервере.", path);
 
             return path;
+        }
+
+        private static string[] GetAllowedRoots()
+        {
+            return (ConfigurationManager.AppSettings["AllowedRoots"] ?? "")
+                .Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(NormalizeRoot)
+                .Where(x => !String.IsNullOrWhiteSpace(x))
+                .ToArray();
         }
 
         private static string NormalizeRoot(string value)

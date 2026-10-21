@@ -10,6 +10,11 @@
     <add name="MisDb"
          connectionString="Data Source=tcp:DB_SERVER,1433;Initial Catalog=DB_NAME;User ID=DB_USER;Password=DB_PASSWORD;TrustServerCertificate=True;Application Name=PatientFilesWeb;"
          providerName="System.Data.SqlClient" />
+
+    <!-- Отдельная минимально-привилегированная учётная запись для прикрепления файлов. -->
+    <add name="MisWriteDb"
+         connectionString="Data Source=tcp:DB_SERVER,1433;Initial Catalog=DB_NAME;User ID=DB_WRITE_USER;Password=DB_WRITE_PASSWORD;TrustServerCertificate=True;Application Name=PatientFilesWebUpload;"
+         providerName="System.Data.SqlClient" />
   </connectionStrings>
 
   <appSettings>
@@ -23,6 +28,16 @@
     <add key="PathMappings" value="" />
 
     <add key="MaxPreviewSizeMb" value="100" />
+
+    <!-- Каталог, куда веб-модуль сохраняет новые прикрепляемые файлы. Должен входить в AllowedRoots. -->
+    <add key="UploadRoot" value="\\FILE_SERVER\SHARE_ROOT" />
+
+    <!-- Лимит самого приложения. IIS также имеет собственный maxAllowedContentLength. -->
+    <add key="MaxUploadSizeMb" value="30" />
+
+    <!-- Так как текущий сайт работает анонимно, запись в МИС создаётся от технического пользователя. -->
+    <add key="UploadCreateUserId" value="1" />
+    <add key="UploadCreateUserName" value="Веб-модуль" />
   </appSettings>
 
   <system.web>

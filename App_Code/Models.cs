@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace PatientFiles
 {
@@ -22,6 +22,21 @@ namespace PatientFiles
         public string doctorName { get; set; }
         public string fileName { get; set; }
         public string extension { get; set; }
+    }
+
+    public sealed class FileTypeDto
+    {
+        public int fileTypeId { get; set; }
+        public string code { get; set; }
+        public string name { get; set; }
+    }
+
+    public sealed class UploadResultDto
+    {
+        public int attachmentId { get; set; }
+        public int fileInfoId { get; set; }
+        public string fileType { get; set; }
+        public string fileTypeCode { get; set; }
     }
 
     internal sealed class FileRecord : FileDto

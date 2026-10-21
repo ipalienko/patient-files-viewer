@@ -13,6 +13,10 @@
 - полноэкранный просмотр;
 - печать PDF и печатное представление остальных поддерживаемых форматов;
 - скачивание оригинала;
+- прикрепление нового файла к текущей МКАБ из браузера;
+- выбор вида документа из активного справочника `atf_FileType`;
+- сохранение загружаемого файла в SMB-хранилище под UUID-именем с исходным расширением;
+- компенсация при ошибке: если запись в БД не создалась, файл удаляется из хранилища;
 - фильтр по типу документа, сотруднику и формату;
 - изменяемая мышью ширина панели со списком документов;
 - аудит запросов и ошибок в `App_Data/Logs`;
@@ -55,7 +59,8 @@ hlt_MKAB.MKABID
 - доступ к SQL Server;
 - доступ к SMB-хранилищу файлов;
 - Application Pool: `.NET CLR v4.0`, `Integrated`;
-- сервисная учётная запись пула с правом чтения SMB и записи в `App_Data/Logs`.
+- сервисная учётная запись пула с правом чтения SMB и записи в `App_Data/Logs`;
+- для функции прикрепления файлов этой же учётной записи нужны права создания/удаления файлов в `UploadRoot`.
 
 ### Для сборки browser-viewer
 
@@ -70,7 +75,7 @@ hlt_MKAB.MKABID
 ### 1. Клонировать проект
 
 ```powershell
-git clone https://github.com/ipalienko/patient-files-viewer.git C:\inetpub\wwwroot\PatientFiles
+git clone REPOSITORY_URL C:\inetpub\wwwroot\PatientFiles
 cd C:\inetpub\wwwroot\PatientFiles
 ```
 
@@ -86,10 +91,15 @@ Copy-Item .\web.config.example .\web.config
 
 - `DB_SERVER` — адрес SQL Server;
 - `DB_NAME` — имя базы;
-- `DB_USER` / `DB_PASSWORD` — SQL-реквизиты, если используется SQL Authentication;
-- `\\FILE_SERVER\SHARE_ROOT` — разрешённый SMB-корень.
+- `DB_USER` / `DB_PASSWORD` — SQL-реквизиты read-only подключения `MisDb`;
+- `DB_WRITE_USER` / `DB_WRITE_PASSWORD` — отдельные SQL-реквизиты для `MisWriteDb`, используемые только при прикреплении файлов;
+- `\\FILE_SERVER\SHARE_ROOT` — разрешённый SMB-корень;
+- `UploadRoot` — каталог, куда модуль будет сохранять новые файлы. Он должен находиться внутри `AllowedRoots`;
+- `UploadCreateUserId` / `UploadCreateUserName` — технический пользователь, который будет записан в `atf_FileAttachment`.
 
-Если используется Windows Integrated Security для SQL, замените SQL Authentication в connection string на `Integrated Security=True`.
+Если используется Windows Integrated Security для SQL, замените SQL Authentication в соответствующей connection string на `Integrated Security=True`.
+
+Рекомендуется не выдавать права записи существующему read-only пользователю просмотра. Для загрузки заведите отдельную минимально-привилегированную учётную запись `MisWriteDb`.
 
 Никогда не коммитьте рабочий `web.config`.
 
@@ -157,13 +167,20 @@ App_Data\Logs
 
 ### 6. Права SQL
 
-Минимально нужны `SELECT` на:
+Для просмотра минимально нужны `SELECT` на:
 
 ```text
 dbo.hlt_MKAB
 dbo.atf_FileInfo
 dbo.atf_FileAttachment
 dbo.atf_FileType
+```
+
+Подключение `MisWriteDb` для прикрепления файлов должно иметь `SELECT` на `hlt_MKAB` и `atf_FileType`, а также `INSERT` на:
+
+```text
+dbo.atf_FileInfo
+dbo.atf_FileAttachment
 ```
 
 Пример находится в `Sql/03_permissions_example.sql`.
@@ -189,6 +206,10 @@ http://WEB_SERVER:PORT/?mkabid=123456
 ```
 
 Сначала рекомендуется проверить PDF и JPG/PNG, затем DOC/DOCX, XLS/XLSX, ODT и TIFF.
+
+Перед первой записью в рабочую БД рекомендуется выполнить `Sql/04_verify_attachment_convention.sql` на МКАБ, куда файл недавно был прикреплён штатно через десктопную МИС. Скрипт только читает данные и помогает сверить фактическое соглашение об именовании файлов.
+
+Для теста загрузки используйте отдельного пациента/тестовую карту: выберите файл, вид документа и дату, после чего убедитесь, что одновременно появились физический файл в `UploadRoot` и две связанные записи в `atf_FileInfo` / `atf_FileAttachment`.
 
 ## Конфигурация
 
@@ -222,11 +243,34 @@ X:\=>\\FILE_SERVER\SHARE_ROOT
 
 Максимальный размер файла для передачи в browser-viewer. Скачивание оригинала этим лимитом не ограничивается.
 
+### `UploadRoot`
+
+Каталог для новых файлов. Должен быть абсолютным локальным/UNC-путём и находиться внутри одного из `AllowedRoots`.
+
+Новый файл получает имя вида:
+
+```text
+<uuid>.<исходное расширение>
+```
+
+Сначала файл пишется во временное имя `.uploading`, затем переименовывается в окончательное. Только после этого создаются записи в БД. Если SQL-транзакция завершается ошибкой, физический файл удаляется.
+
+### `MaxUploadSizeMb`
+
+Лимит размера загрузки на уровне приложения. У IIS есть отдельный лимит `maxAllowedContentLength`; если нужны файлы больше стандартного лимита IIS, его надо увеличить отдельно.
+
+### `UploadCreateUserId` / `UploadCreateUserName`
+
+Технический пользователь для `rf_CreateUserID` и `CreateUserName`. Текущая версия сайта работает с Anonymous Authentication, поэтому реальная доменная учётная запись посетителя серверу неизвестна. IP клиента при этом записывается в аудит.
+
 ## Безопасность
 
 - браузер не получает UNC-путь;
 - `File.ashx` принимает идентификатор файла и повторно проверяет его принадлежность `MKABID`;
 - путь проходит allow-list `AllowedRoots`;
+- `UploadRoot` также обязан находиться внутри `AllowedRoots`;
+- вид документа для загрузки выбирается только по существующему активному `FileTypeID`, а не принимается произвольной строкой от браузера;
+- создание `atf_FileInfo` и `atf_FileAttachment` выполняется в одной SQL-транзакции;
 - разрешены только неисполняемые расширения;
 - макросы Office-документов не выполняются;
 - ответы содержат `no-store`;
@@ -257,3 +301,5 @@ window.open('/?mkabid=' + encodeURIComponent(mkabid), '_blank', 'noopener');
 
 - Zrimo — MIT OR Apache-2.0;
 - ShrimpDocViewer — MIT OR Apache-2.0.
+
+При сборке доступные license/notices копируются в `ViewerDist/licenses`.

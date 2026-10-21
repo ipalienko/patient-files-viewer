@@ -1,18 +1,31 @@
 /*
-  ШАБЛОН минимальных прав для Windows service account.
-  Все значения ниже условные. Перед применением согласуйте с DBA.
+  Рекомендуемая схема прав:
 
-  Замените DOMAIN\\SERVICE_ACCOUNT и имя базы локальными значениями.
+  1) MisDb — существующая read-only учётная запись для просмотра.
+  2) MisWriteDb — отдельная минимально-привилегированная учётная запись только для прикрепления файлов.
+
+  Все имена ниже условные. Перед применением согласуйте с DBA.
 */
 
--- CREATE LOGIN [DOMAIN\SERVICE_ACCOUNT] FROM WINDOWS;
+-- ===== READ-ONLY account: MisDb =====
+-- GRANT SELECT ON dbo.hlt_MKAB TO [READ_ACCOUNT];
+-- GRANT SELECT ON dbo.atf_FileInfo TO [READ_ACCOUNT];
+-- GRANT SELECT ON dbo.atf_FileAttachment TO [READ_ACCOUNT];
+-- GRANT SELECT ON dbo.atf_FileType TO [READ_ACCOUNT];
 -- GO
--- USE [YOUR_DATABASE];
+
+-- ===== WRITE account: MisWriteDb =====
+-- Для проверки пациента и выбранного типа файла:
+-- GRANT SELECT ON dbo.hlt_MKAB TO [WRITE_ACCOUNT];
+-- GRANT SELECT ON dbo.atf_FileType TO [WRITE_ACCOUNT];
+
+-- Для создания связки файла:
+-- GRANT INSERT ON dbo.atf_FileInfo TO [WRITE_ACCOUNT];
+-- GRANT INSERT ON dbo.atf_FileAttachment TO [WRITE_ACCOUNT];
 -- GO
--- CREATE USER [DOMAIN\SERVICE_ACCOUNT] FOR LOGIN [DOMAIN\SERVICE_ACCOUNT];
--- GO
--- GRANT SELECT ON dbo.hlt_MKAB TO [DOMAIN\SERVICE_ACCOUNT];
--- GRANT SELECT ON dbo.atf_FileInfo TO [DOMAIN\SERVICE_ACCOUNT];
--- GRANT SELECT ON dbo.atf_FileAttachment TO [DOMAIN\SERVICE_ACCOUNT];
--- GRANT SELECT ON dbo.atf_FileType TO [DOMAIN\SERVICE_ACCOUNT];
--- GO
+
+/*
+  UPDATE/DELETE приложению для загрузки не нужны.
+  Если триггеры МИС требуют дополнительных прав, это будет видно при тестовой вставке;
+  не выдавайте db_owner/db_datawriter целиком без необходимости.
+*/
